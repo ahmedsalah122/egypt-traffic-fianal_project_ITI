@@ -23,12 +23,15 @@ from pyspark.sql.avro.functions import from_avro
 KAFKA_BOOTSTRAP     = os.environ["KAFKA_BOOTSTRAP"]
 SCHEMA_REGISTRY_URL = os.environ["SCHEMA_REGISTRY_URL"]   # kept for reference / future SR use
 S3_BUCKET           = os.environ["S3_BUCKET"]
-AWS_ACCESS_KEY      = os.environ["AWS_ACCESS_KEY_ID"]
-AWS_SECRET_KEY      = os.environ["AWS_SECRET_ACCESS_KEY"]
+# AWS_ACCESS_KEY      = os.environ["AWS_ACCESS_KEY_ID"]
+# AWS_SECRET_KEY      = os.environ["AWS_SECRET_ACCESS_KEY"]
+AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY_ID")
+AWS_SECRET_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
 AWS_REGION          = os.getenv("AWS_REGION", "eu-central-1")
 JDBC_URL            = os.getenv("JDBC_URL", "")
 POSTGRES_PASSWORD   = os.getenv("POSTGRES_PASSWORD", "traffic")
 CHECKPOINT_BASE     = f"s3a://{S3_BUCKET}/checkpoints"
+DEPLOY_ENV          = os.getenv("DEPLOY_ENV", "local")
 
 TOPIC_FLOW      = "traffic-flow"
 TOPIC_INCIDENTS = "traffic-incidents"
@@ -38,6 +41,11 @@ TOPIC_INCIDENTS = "traffic-incidents"
 # ──────────────────────────────────────────────────────────────────────────────
 
 SCHEMA_DIR = "/opt/spark/schemas"
+
+if not os.path.exists(SCHEMA_DIR):
+    raise RuntimeError(
+        f"Schema directory not found: {SCHEMA_DIR}"
+    )
 
 with open(f"{SCHEMA_DIR}/traffic_flow.avsc") as f:
     FLOW_AVRO_SCHEMA = f.read()
@@ -141,25 +149,79 @@ JDBC_PROPS = {
 # ──────────────────────────────────────────────────────────────────────────────
 
 def build_spark() -> SparkSession:
-    spark = (
+    builder = (
         SparkSession.builder
         .appName("EgyptTrafficStreaming")
         .master("spark://spark-master:7077")
-        .config("spark.hadoop.fs.s3a.access.key", AWS_ACCESS_KEY)
-        .config("spark.hadoop.fs.s3a.secret.key", AWS_SECRET_KEY)
-        .config("spark.hadoop.fs.s3a.endpoint", f"s3.{AWS_REGION}.amazonaws.com")
-        .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
         .config(
-            "spark.hadoop.fs.s3a.aws.credentials.provider",
-            "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider",
+            "spark.hadoop.fs.s3a.endpoint",
+            f"s3.{AWS_REGION}.amazonaws.com"
         )
-        .config("spark.sql.streaming.checkpointLocation", CHECKPOINT_BASE)
-        .config("spark.sql.shuffle.partitions", "4")
-        .config("spark.sql.streaming.forceDeleteTempCheckpointLocation", "true")
-        .getOrCreate()
+        .config(
+            "spark.hadoop.fs.s3a.impl",
+            "org.apache.hadoop.fs.s3a.S3AFileSystem"
+        )
+        .config(
+            "spark.sql.streaming.checkpointLocation",
+            CHECKPOINT_BASE
+        )
+        .config(
+            "spark.sql.shuffle.partitions",
+            "4"
+        )
+        .config(
+            "spark.sql.streaming.forceDeleteTempCheckpointLocation",
+            "true"
+        )
     )
+
+    if DEPLOY_ENV == "prod":
+        builder = builder.config(
+            "spark.hadoop.fs.s3a.aws.credentials.provider",
+            "com.amazonaws.auth.InstanceProfileCredentialsProvider"
+        )
+    else:
+        builder = (
+            builder
+            .config(
+                "spark.hadoop.fs.s3a.access.key",
+                AWS_ACCESS_KEY
+            )
+            .config(
+                "spark.hadoop.fs.s3a.secret.key",
+                AWS_SECRET_KEY
+            )
+            .config(
+                "spark.hadoop.fs.s3a.aws.credentials.provider",
+                "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider"
+            )
+        )
+
+    spark = builder.getOrCreate()
+
     spark.sparkContext.setLogLevel("WARN")
+
     return spark
+# def build_spark() -> SparkSession:
+#     spark = (
+#         SparkSession.builder
+#         .appName("EgyptTrafficStreaming")
+#         .master("spark://spark-master:7077")
+#         .config("spark.hadoop.fs.s3a.access.key", AWS_ACCESS_KEY)
+#         .config("spark.hadoop.fs.s3a.secret.key", AWS_SECRET_KEY)
+#         .config("spark.hadoop.fs.s3a.endpoint", f"s3.{AWS_REGION}.amazonaws.com")
+#         .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
+#         .config(
+#             "spark.hadoop.fs.s3a.aws.credentials.provider",
+#             "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider",
+#         )
+#         .config("spark.sql.streaming.checkpointLocation", CHECKPOINT_BASE)
+#         .config("spark.sql.shuffle.partitions", "4")
+#         .config("spark.sql.streaming.forceDeleteTempCheckpointLocation", "true")
+#         .getOrCreate()
+#     )
+#     spark.sparkContext.setLogLevel("WARN")
+#     return spark
 
 
 # ──────────────────────────────────────────────────────────────────────────────

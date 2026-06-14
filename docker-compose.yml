@@ -183,6 +183,10 @@ services:
       - --conf
       - spark.executor.memory=1g
       - /opt/spark/jobs/streaming_job.py
+      - --conf
+      - spark.ui.port=4040
+    ports:
+      - "4040:4040"
     restart: on-failure
 
   # ── PostgreSQL — Gold layer tables, PostGIS, JDBC writes from Spark ──────────

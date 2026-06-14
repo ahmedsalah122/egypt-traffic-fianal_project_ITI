@@ -1,0 +1,33 @@
+{
+  "type": "record",
+  "name": "TrafficIncident",
+  "namespace": "io.egypt.traffic",
+  "doc": "Traffic incident from TomTom Incident Details API v5. Geometry is always LineString — lat/lon is the midpoint of the affected segment.",
+  "fields": [
+    {"name": "ingested_at",               "type": "long"},
+    {"name": "bbox_name",                 "type": "string",
+     "doc": "Which bounding box was queried"},
+    {"name": "category",                  "type": "string",
+     "doc": "Jam, Road closed, Accident, etc."},
+    {"name": "icon_category_id",          "type": "int"},
+    {"name": "magnitude",                 "type": "int",
+     "doc": "0=unknown 1=minor 2=moderate 3=major 4=undefined"},
+    {"name": "from_location",             "type": ["null", "string"], "default": null},
+    {"name": "to_location",               "type": ["null", "string"], "default": null},
+    {"name": "delay_seconds",             "type": "int", "default": 0},
+    {"name": "length_meters",             "type": "int", "default": 0},
+    {"name": "road_numbers",              "type": ["null", "string"], "default": null},
+    {"name": "start_time",                "type": ["null", "string"], "default": null},
+    {"name": "end_time",                  "type": ["null", "string"], "default": null},
+    {"name": "time_validity",             "type": ["null", "string"], "default": null,
+     "doc": "PRESENT or FUTURE"},
+    {"name": "probability_of_occurrence", "type": ["null", "string"], "default": null,
+     "doc": "CERTAIN, PROBABLE, RISK_OF, IMPROBABLE"},
+    {"name": "number_of_reports",         "type": ["null", "int"],    "default": null},
+    {"name": "last_report_time",          "type": ["null", "string"], "default": null},
+    {"name": "lat",                       "type": ["null", "double"], "default": null,
+     "doc": "Midpoint latitude of the incident LineString"},
+    {"name": "lon",                       "type": ["null", "double"], "default": null,
+     "doc": "Midpoint longitude of the incident LineString"}
+  ]
+}

@@ -1,0 +1,234 @@
+services:
+
+  # ── Kafka in KRaft mode (no Zookeeper) ──────────────────────────────────────
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: kafka
+    mem_limit: 1.5g
+    mem_reservation: 768m
+    cpus: "1.0"
+    hostname: kafka
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qg"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  # ── Schema Registry ──────────────────────────────────────────────────────────
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.6.1
+    container_name: schema-registry
+    mem_limit: 512m
+    mem_reservation: 256m
+    cpus: "0.5"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka:9092
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/subjects"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  # ── Topic initializer ────────────────────────────────────────────────────────
+  kafka-init:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: kafka-init
+    mem_limit: 256m
+    mem_reservation: 128m
+    cpus: "0.5"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-c"]
+    command: >
+      "
+      echo 'Creating topics...' &&
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic traffic-flow --partitions 3 --replication-factor 1 --config retention.ms=86400000 &&
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic traffic-incidents --partitions 3 --replication-factor 1 --config retention.ms=86400000 &&
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic traffic-dlq --partitions 1 --replication-factor 1 --config retention.ms=604800000 &&
+      echo 'Topics created:' &&
+      kafka-topics --bootstrap-server kafka:9092 --list
+      "
+    restart: "no"
+
+  # ── Traffic producer ─────────────────────────────────────────────────────────
+  producer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: producer
+    mem_limit: 256m
+    mem_reservation: 128m
+    cpus: "0.5"
+    depends_on:
+      schema-registry:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    environment:
+      TOMTOM_API_KEY: ${TOMTOM_API_KEY}
+      KAFKA_BOOTSTRAP: kafka:9092
+      SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      POLL_INTERVAL_S: 900
+    restart: on-failure
+
+  # ── Spark master ─────────────────────────────────────────────────────────────
+  spark-master:
+    image: apache/spark:3.5.0
+    container_name: spark-master
+    mem_limit: 512m
+    mem_reservation: 256m
+    cpus: "0.5"
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master"]
+    ports:
+      - "8080:8080"
+      - "7077:7077"
+    volumes:
+      - ./spark/jobs:/opt/spark/jobs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  # ── Spark worker ─────────────────────────────────────────────────────────────
+  spark-worker:
+    image: apache/spark:3.5.0
+    container_name: spark-worker
+    mem_limit: 1.5g
+    mem_reservation: 1g
+    cpus: "1.0"
+    depends_on:
+      spark-master:
+        condition: service_healthy
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "spark://spark-master:7077"]
+    environment:
+      SPARK_WORKER_MEMORY: 1g
+      SPARK_WORKER_CORES: 2
+    volumes:
+      - ./spark/jobs:/opt/spark/jobs
+
+  # ── Spark submit — submits the streaming job, stays alive as the driver ──────
+  spark-submit:
+    image: apache/spark:3.5.0
+    user: root
+    container_name: spark-submit
+    mem_limit: 2g
+    mem_reservation: 1g
+    cpus: "1.5"
+    depends_on:
+      spark-master:
+        condition: service_healthy
+      spark-worker:
+        condition: service_started
+      schema-registry:
+        condition: service_healthy
+      producer:
+        condition: service_started
+      postgres-primary:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      S3_BUCKET: ${S3_BUCKET}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_REGION: ${AWS_REGION:-eu-central-1}
+      JDBC_URL: jdbc:postgresql://postgres-primary:5432/traffic
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./spark/jobs:/opt/spark/jobs
+      - ./schemas:/opt/spark/schemas:ro
+    command:
+      - /opt/spark/bin/spark-submit
+      - --master
+      - spark://spark-master:7077
+      - --deploy-mode
+      - client
+      - --driver-memory
+      - 1g
+      - --packages
+      - org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.apache.spark:spark-avro_2.12:3.5.0,org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262,org.postgresql:postgresql:42.7.3
+      - --conf
+      - spark.sql.shuffle.partitions=4
+      - --conf
+      - spark.streaming.stopGracefullyOnShutdown=true
+      - --conf
+      - spark.executor.memory=1g
+      - /opt/spark/jobs/streaming_job.py
+    restart: on-failure
+
+  # ── PostgreSQL — Gold layer tables, PostGIS, JDBC writes from Spark ──────────
+  postgres-primary:
+    image: postgis/postgis:16-3.4
+    container_name: postgres-primary
+    mem_limit: 1g
+    mem_reservation: 512m
+    cpus: "1.0"
+    environment:
+      POSTGRES_DB:       traffic
+      POSTGRES_USER:     traffic
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U traffic -d traffic"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Grafana — ops dashboards ──────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: grafana
+    mem_limit: 512m
+    mem_reservation: 256m
+    cpus: "0.5"
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+
+volumes:
+  kafka_data:
+  postgres_data:
+  grafana_data:

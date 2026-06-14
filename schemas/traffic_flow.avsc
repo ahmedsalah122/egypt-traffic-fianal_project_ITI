@@ -1,0 +1,31 @@
+{
+  "type": "record",
+  "name": "TrafficFlow",
+  "namespace": "io.egypt.traffic",
+  "doc": "Real-time traffic flow reading from TomTom Flow Segment Data API v4",
+  "fields": [
+    {"name": "ingested_at",           "type": "long",
+     "doc": "Unix ms timestamp when the producer fetched this record"},
+    {"name": "location_name",         "type": "string",
+     "doc": "Human-readable location label, e.g. tahrir_square"},
+    {"name": "query_lat",             "type": "double",
+     "doc": "Latitude of the query point sent to TomTom"},
+    {"name": "query_lon",             "type": "double",
+     "doc": "Longitude of the query point sent to TomTom"},
+    {"name": "segment_lat",           "type": ["null", "double"], "default": null,
+     "doc": "Latitude of the midpoint of the snapped road segment"},
+    {"name": "segment_lon",           "type": ["null", "double"], "default": null,
+     "doc": "Longitude of the midpoint of the snapped road segment"},
+    {"name": "frc",                   "type": "string",
+     "doc": "Functional Road Class — FRC0 (motorway) to FRC6 (local road)"},
+    {"name": "current_speed_kmh",     "type": "int"},
+    {"name": "free_flow_speed_kmh",   "type": "int"},
+    {"name": "current_travel_time",   "type": "int",  "doc": "Seconds"},
+    {"name": "free_flow_travel_time", "type": "int",  "doc": "Seconds"},
+    {"name": "confidence",            "type": "float",
+     "doc": "TomTom confidence score 0.0–1.0"},
+    {"name": "road_closed",           "type": "boolean"},
+    {"name": "congestion_ratio",      "type": ["null", "float"], "default": null,
+     "doc": "current_speed / free_flow_speed — null if free_flow_speed is 0"}
+  ]
+}
